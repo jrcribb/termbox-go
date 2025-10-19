@@ -1,3 +1,4 @@
+//go:build !windows
 // +build !windows
 
 package termbox
@@ -19,11 +20,12 @@ import (
 // After successful initialization, the library must be finalized using 'Close' function.
 //
 // Example usage:
-//      err := termbox.Init()
-//      if err != nil {
-//              panic(err)
-//      }
-//      defer termbox.Close()
+//
+//	err := termbox.Init()
+//	if err != nil {
+//	        panic(err)
+//	}
+//	defer termbox.Close()
 func Init() error {
 	if IsInit {
 		return nil
@@ -44,6 +46,7 @@ func Init() error {
 		}
 		in, err = syscall.Open("/dev/tty", syscall.O_RDONLY, 0)
 		if err != nil {
+			out.Close() // Clean up output file descriptor on error
 			return err
 		}
 	}
@@ -57,6 +60,10 @@ func Init() error {
 
 	err = setup_term()
 	if err != nil {
+		out.Close()
+		if runtime.GOOS != "openbsd" && runtime.GOOS != "freebsd" {
+			syscall.Close(in)
+		}
 		return fmt.Errorf("termbox: error while reading terminfo data: %v", err)
 	}
 
@@ -65,14 +72,26 @@ func Init() error {
 
 	_, err = fcntl(in, syscall.F_SETFL, syscall.O_ASYNC|syscall.O_NONBLOCK)
 	if err != nil {
+		out.Close()
+		if runtime.GOOS != "openbsd" && runtime.GOOS != "freebsd" {
+			syscall.Close(in)
+		}
 		return err
 	}
 	_, err = fcntl(in, syscall.F_SETOWN, syscall.Getpid())
 	if runtime.GOOS != "darwin" && err != nil {
+		out.Close()
+		if runtime.GOOS != "openbsd" && runtime.GOOS != "freebsd" {
+			syscall.Close(in)
+		}
 		return err
 	}
 	err = tcgetattr(outfd, &orig_tios)
 	if err != nil {
+		out.Close()
+		if runtime.GOOS != "openbsd" && runtime.GOOS != "freebsd" {
+			syscall.Close(in)
+		}
 		return err
 	}
 
@@ -89,6 +108,10 @@ func Init() error {
 
 	err = tcsetattr(outfd, &tios)
 	if err != nil {
+		out.Close()
+		if runtime.GOOS != "openbsd" && runtime.GOOS != "freebsd" {
+			syscall.Close(in)
+		}
 		return err
 	}
 
@@ -261,7 +284,11 @@ func SetCell(x, y int, ch rune, fg, bg Attribute) {
 }
 
 // Returns the specified cell from the internal back buffer.
+// Returns an empty cell if coordinates are out of bounds.
 func GetCell(x, y int) Cell {
+	if x < 0 || x >= back_buffer.width || y < 0 || y >= back_buffer.height {
+		return Cell{}
+	}
 	return back_buffer.cells[y*back_buffer.width+x]
 }
 
@@ -390,9 +417,10 @@ func PollEvent() Event {
 		copy(inbuf, inbuf[event.N:])
 		inbuf = inbuf[:len(inbuf)-event.N]
 	}
-	if status == event_extracted {
+	switch status {
+	case event_extracted:
 		return event
-	} else if status == esc_wait {
+	case esc_wait:
 		esc_wait_timer = time.NewTimer(esc_wait_delay)
 		esc_timeout = esc_wait_timer.C
 	}
@@ -418,9 +446,10 @@ func PollEvent() Event {
 				copy(inbuf, inbuf[event.N:])
 				inbuf = inbuf[:len(inbuf)-event.N]
 			}
-			if status == event_extracted {
+			switch status {
+			case event_extracted:
 				return event
-			} else if status == esc_wait {
+			case esc_wait:
 				esc_wait_timer = time.NewTimer(esc_wait_delay)
 				esc_timeout = esc_wait_timer.C
 			}
@@ -498,34 +527,34 @@ func SetInputMode(mode InputMode) InputMode {
 
 // Sets the termbox output mode. Termbox has four output options:
 //
-// 1. OutputNormal => [1..8]
-//    This mode provides 8 different colors:
-//        black, red, green, yellow, blue, magenta, cyan, white
-//    Shortcut: ColorBlack, ColorRed, ...
-//    Attributes: AttrBold, AttrUnderline, AttrReverse
+//  1. OutputNormal => [1..8]
+//     This mode provides 8 different colors:
+//     black, red, green, yellow, blue, magenta, cyan, white
+//     Shortcut: ColorBlack, ColorRed, ...
+//     Attributes: AttrBold, AttrUnderline, AttrReverse
 //
-//    Example usage:
-//        SetCell(x, y, '@', ColorBlack | AttrBold, ColorRed);
+//     Example usage:
+//     SetCell(x, y, '@', ColorBlack | AttrBold, ColorRed);
 //
-// 2. Output256 => [1..256]
-//    In this mode you can leverage the 256 terminal mode:
-//    0x01 - 0x08: the 8 colors as in OutputNormal
-//    0x09 - 0x10: Color* | AttrBold
-//    0x11 - 0xe8: 216 different colors
-//    0xe9 - 0x1ff: 24 different shades of grey
+//  2. Output256 => [1..256]
+//     In this mode you can leverage the 256 terminal mode:
+//     0x01 - 0x08: the 8 colors as in OutputNormal
+//     0x09 - 0x10: Color* | AttrBold
+//     0x11 - 0xe8: 216 different colors
+//     0xe9 - 0x1ff: 24 different shades of grey
 //
-//    Example usage:
-//        SetCell(x, y, '@', 184, 240);
-//        SetCell(x, y, '@', 0xb8, 0xf0);
+//     Example usage:
+//     SetCell(x, y, '@', 184, 240);
+//     SetCell(x, y, '@', 0xb8, 0xf0);
 //
-// 3. Output216 => [1..216]
-//    This mode supports the 3rd range of the 256 mode only.
-//    But you don't need to provide an offset.
+//  3. Output216 => [1..216]
+//     This mode supports the 3rd range of the 256 mode only.
+//     But you don't need to provide an offset.
 //
-// 4. OutputGrayscale => [1..26]
-//    This mode supports the 4th range of the 256 mode
-//    and black and white colors from 3th range of the 256 mode
-//    But you don't need to provide an offset.
+//  4. OutputGrayscale => [1..26]
+//     This mode supports the 4th range of the 256 mode
+//     and black and white colors from 3th range of the 256 mode
+//     But you don't need to provide an offset.
 //
 // In all modes, 0x00 represents the default color.
 //
