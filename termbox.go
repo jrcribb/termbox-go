@@ -1,15 +1,18 @@
+//go:build !windows
 // +build !windows
 
 package termbox
 
-import "unicode/utf8"
-import "bytes"
-import "syscall"
-import "unsafe"
-import "strings"
-import "strconv"
-import "os"
-import "io"
+import (
+	"bytes"
+	"io"
+	"os"
+	"strconv"
+	"strings"
+	"syscall"
+	"unicode/utf8"
+	"unsafe"
+)
 
 // private API
 
@@ -42,6 +45,16 @@ const (
 const (
 	coord_invalid = -2
 	attr_invalid  = Attribute(0xFFFF)
+)
+
+// ANSI escape sequence constants
+const (
+	ansiEscapeStart = "\033["
+	ansiCursorMove  = "H"
+	ansiSemicolon   = ";"
+	ansiSGRFg256    = "\033[38;5;"
+	ansiSGRBg256    = "\033[48;5;"
+	ansiSGREnd      = "m"
 )
 
 type input_event struct {
@@ -98,19 +111,19 @@ var (
 )
 
 func write_cursor(x, y int) {
-	outbuf.WriteString("\033[")
+	outbuf.WriteString(ansiEscapeStart)
 	outbuf.Write(strconv.AppendUint(intbuf, uint64(y+1), 10))
-	outbuf.WriteString(";")
+	outbuf.WriteString(ansiSemicolon)
 	outbuf.Write(strconv.AppendUint(intbuf, uint64(x+1), 10))
-	outbuf.WriteString("H")
+	outbuf.WriteString(ansiCursorMove)
 }
 
 func write_sgr_fg(a Attribute) {
 	switch output_mode {
 	case Output256, Output216, OutputGrayscale:
-		outbuf.WriteString("\033[38;5;")
+		outbuf.WriteString(ansiSGRFg256)
 		outbuf.Write(strconv.AppendUint(intbuf, uint64(a-1), 10))
-		outbuf.WriteString("m")
+		outbuf.WriteString(ansiSGREnd)
 	case OutputRGB:
 		r, g, b := AttributeToRGB(a)
 		outbuf.WriteString(escapeRGB(true, r, g, b))
@@ -130,9 +143,9 @@ func write_sgr_fg(a Attribute) {
 func write_sgr_bg(a Attribute) {
 	switch output_mode {
 	case Output256, Output216, OutputGrayscale:
-		outbuf.WriteString("\033[48;5;")
+		outbuf.WriteString(ansiSGRBg256)
 		outbuf.Write(strconv.AppendUint(intbuf, uint64(a-1), 10))
-		outbuf.WriteString("m")
+		outbuf.WriteString(ansiSGREnd)
 	case OutputRGB:
 		r, g, b := AttributeToRGB(a)
 		outbuf.WriteString(escapeRGB(false, r, g, b))
@@ -186,17 +199,21 @@ func write_sgr(fg, bg Attribute) {
 }
 
 func escapeRGB(fg bool, r uint8, g uint8, b uint8) string {
-	var escape string = "\033["
+	var builder strings.Builder
+	builder.WriteString("\033[")
 	if fg {
-		escape += "38"
+		builder.WriteString("38")
 	} else {
-		escape += "48"
+		builder.WriteString("48")
 	}
-	escape += ";2;"
-	escape += strconv.FormatUint(uint64(r), 10) + ";"
-	escape += strconv.FormatUint(uint64(g), 10) + ";"
-	escape += strconv.FormatUint(uint64(b), 10) + "m"
-	return escape
+	builder.WriteString(";2;")
+	builder.WriteString(strconv.FormatUint(uint64(r), 10))
+	builder.WriteByte(';')
+	builder.WriteString(strconv.FormatUint(uint64(g), 10))
+	builder.WriteByte(';')
+	builder.WriteString(strconv.FormatUint(uint64(b), 10))
+	builder.WriteByte('m')
+	return builder.String()
 }
 
 type winsize struct {
